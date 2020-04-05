@@ -2,7 +2,7 @@
 title: "ds2_midterm"
 author: "xinran"
 date: "4/2/2020"
-output: html_document
+output: word_document
 ---
 
 ```{r setup, include=FALSE}
@@ -26,7 +26,15 @@ library(pls)
 library(readxl)
 ```
 
-# import dataset and remove rows with missing values 
+Introduction
+
+This dataset is from the Boston Standard Metropolitan Statistical Area (SMSA). Each
+observation in the Boston Housing dataset represents a town in Boston in the 1970s. There are 506 observations and 14 total variables initially. After excluding observations(n=74) with missing values, we have 452 observations. The dataset was split into a training dataset and a testing dataset.
+
+`medv` is the outcome variable, meaning median value of owner-occupied homes in $1000's. We want to predict the housing rent in Boston using the rest of the 13 predicting variables(proximity to the employment center, per capita crime rate by town, average number of rooms per dwelling and so on).
+
+
+### import dataset and remove rows with missing values 
 
 ```{r}
 housing=read_xlsx("./data/housing.xlsx")%>%
@@ -34,31 +42,18 @@ housing=read_xlsx("./data/housing.xlsx")%>%
   na.omit()
 ```
 
+Exploratory analysis/visualization
 
-# visualization
+In the correlation plot of the predicting variables, we found that some of them are highly correlated. Among positive correlations, `crim`(per capita crime rate by town) and `rad`(index of accessibility to radial highways), `crim` and `tax`(full-value property-tax rate per $10,000) are the 2 with the largest correlation coefficients. Among negative correlations, `nox`(nitric oxides concentration (parts per 10 million)) and `dis`(weighted distances to five Boston employment centres), `age`(proportion of owner-occupied units built prior to 1940) and `dis` are the 2 with the largest absolute values of correlation coefficients. 
+
+### visualization
 ```{r}
 x = model.matrix(medv ~., housing)[, -1]
 corrplot::corrplot(cor(x))
 ```
 
 
-```{r,fig.height=12, fig.width=12}
-# matrix of predictors
-x = model.matrix(medv ~ .,housing)[,-1] 
-# vector of response
-y = housing$medv
-
-theme1 <- trellis.par.get()
-theme1$plot.symbol$col <- rgb(.2, .4, .2, .5) 
-theme1$plot.symbol$pch <- 16
-theme1$plot.line$col <- rgb(.8, .1, .1, 1) 
-theme1$plot.line$lwd <- 2
-theme1$strip.background$col <- rgb(.0, .2, .6, .2)
-trellis.par.set(theme1)
-featurePlot(x, y, plot = "scatter", labels = c("","Y"), type = c("p"), layout = c(4, 4))
-```
-
-## split the data into a training set and a test set. 
+### split the data into a training set and a test set. 
 ```{r}
 data(housing)
 housing <- na.omit(housing)
@@ -71,98 +66,157 @@ trRows <- createDataPartition(housing$medv,
 # training data
 x <- model.matrix(medv~.,housing)[trRows,-1]
 y <- housing$medv[trRows]
+train_data = housing[trRows,]
+ctrl1 <- trainControl(method = "repeatedcv", number = 10, repeats = 5)
 
 # test data
 x2 <- model.matrix(medv~.,housing)[-trRows,-1]
 y2 <- housing$medv[-trRows]
+test_data = housing[-trRows,]
 ```
 
-## Fit linear model on the training data
+### set a seed
+```{r}
+set.seed(1)
+```
+
+
+### Fit a linear model
 ```{r}
 # train with 10-fold CV
-ctrl1 <- trainControl(method = "repeatedcv", number = 10, repeats = 5)
-lm_fit <- train(x, y, method = "lm",trControl = ctrl1)
-summary(lm_fit)
+lm_fit_tr <- train(x, y, method = "lm",trControl = ctrl1,metric = 'RMSE')
+summary(lm_fit_tr)
+
+# calculate RMSE using the test data
+pred_lm_tr = predict(lm_fit_tr, test_data)
+lm_rmse_test = sqrt(mean((pred_lm_tr - test_data$medv)^2));
+lm_rmse_test
 ```
 
 ### fit a PCR model
 
 ```{r}
-ctrl1 <- trainControl(method = "repeatedcv", number = 10, repeats = 5)
-set.seed(1)
+# fit the model by centering the data
 pcr.fit <- train(x, y,
                   method = "pcr",
-                  tuneGrid = data.frame(ncomp = 1:14),
+                  tuneLength = length(train_data) - 1,
                   trControl = ctrl1,
                   scale = TRUE)
 
+# select tunning parameter
+pcr.fit$bestTune
+
+#predicted values based on test dataset
 predy2.pcr <- predict(pcr.fit$finalModel, newdata = x2, 
                        ncomp = pcr.fit$bestTune$ncomp)
-mse(y2, predy2.pcr)
 
+# test MSE
+pcr_rmse_test=rmse(y2, predy2.pcr)
+
+#Validation plot showing ncomp=5 have the lowest cross-validation error
 ggplot(pcr.fit, highlight = TRUE) + theme_bw()
 ```
+The tuning parameter selected by cross validation is `r pcr.fit$bestTune`.
 
 ### fit a PLS model
 
 ```{r}
-set.seed(1)
 pls.fit <- train(x, y,
                  method = "pls",
-                 tuneGrid = data.frame(ncomp = 1:14),
+                 tuneLength = length(train_data) - 1,
                  trControl = ctrl1,
                  preProc = c("center", "scale"))
-predy2.pls<- predict(pls.fit, newdata = x2)
-mse(y2, predy2.pls)
 
+# select tuning parameter
+pls.fit$bestTune
+
+#predicted values based on test dataset
+predy2.pls<- predict(pls.fit, newdata = x2,ncomp = pls.fit$bestTune$ncomp)
+
+#test RMSE
+pls_rmse_test=rmse(y2, predy2.pls)
+
+#Validation plot showing ncomp=5 have the lowest cross-validation error
 ggplot(pls.fit, highlight = TRUE)
 ```
+
+The tuning parameter selected by cross validation is `r pls.fit$bestTune`.
+
 
 ### fit a ridge model
 
 ```{r}
-set.seed(1)
 ridge.fit <- train(x, y,
                    method = "glmnet",
                    tuneGrid = expand.grid(alpha = 0, 
                                           lambda = exp(seq(-1, 10, length=100))),
                    trControl = ctrl1)
-predy2.ridge <- predict(ridge.fit, newdata = x2)
-mse(y2, predy2.ridge)
 
+#predicted values based on test dataset
+predy2.ridge <- predict(ridge.fit, newdata = x2)
+
+#test MSE
+ridge_rmse_test=rmse(y2, predy2.ridge)
+
+# plot the RMSE on tuning parameters
 plot(ridge.fit, xTrans = function(x) log(x))
 
+# select the tuning parameter
 ridge.fit$bestTune
 
+#coefficient matrix
 coef(ridge.fit$finalModel,ridge.fit$bestTune$lambda)
 ```
 
 ### fit a lasso model
 
 ```{r}
-set.seed(1)
 lasso.fit <- train(x, y,
                    method = "glmnet",
                    tuneGrid = expand.grid(alpha = 1, 
                                           lambda = exp(seq(-1, 5, length=100))),
                    # preProc = c("center", "scale"),
                    trControl = ctrl1)
-predy2.lasso <- predict(lasso.fit, newdata = x2)
-mse(y2, predy2.lasso)
 
+#predicted values based on test dataset
+predy2.lasso <- predict(lasso.fit, newdata = x2)
+
+# test MSE
+lasso_rmse_test=rmse(y2, predy2.lasso)
+
+# plot the RMSE on tuning parameters
 plot(lasso.fit, xTrans = function(x) log(x))
 
+# select the tuning parameter
 lasso.fit$bestTune
 
+#coefficient matrix
 coef(lasso.fit$finalModel,lasso.fit$bestTune$lambda)
 ```
 
 ## non-linear models
 
-### GAM
+### visualization
+
+```{r,fig.height=12, fig.width=12}
+# set theme
+theme1 <- trellis.par.get()
+theme1$plot.symbol$col <- rgb(.2, .4, .2, .5) 
+theme1$plot.symbol$pch <- 16
+theme1$plot.line$col <- rgb(.8, .1, .1, 1) 
+theme1$plot.line$lwd <- 2
+theme1$strip.background$col <- rgb(.0, .2, .6, .2)
+trellis.par.set(theme1)
+
+# use scatterplot to visualize the relationship between medv and the rest of the variables
+featurePlot(x, y, plot = "scatter", labels = c("","Y"), type = c("p"), layout = c(4, 4))
+```
+
+We plot each of the 13 predicting variables using scatterplot. Variable `lstat` has a potentially nonlinear trend.
+
+### Generalized Additive Model (GAM)
 
 ```{r}
-set.seed(1)
 gam.fit <- train(x, y,
                  method = "gam",
                  tuneGrid = data.frame(method = "GCV.Cp", select = c(TRUE,FALSE)),
@@ -171,14 +225,16 @@ gam.fit <- train(x, y,
 gam.fit$bestTune
 
 gam.fit$finalModel
+
+summary(gam.fit)
 ```
 
-### MARS
+### Multivariate Adaptive Regression Splines (MARS)
+
 ```{r}
 mars_grid <- expand.grid(degree = 1:2, 
                          nprune = 2:10)
 
-set.seed(1)
 mars.fit <- train(x, y,
                  method = "earth",
                  tuneGrid = mars_grid,
@@ -191,12 +247,18 @@ mars.fit$bestTune
 coef(mars.fit$finalModel) 
 ```
 
-```{r}
-resamp <- resamples(list(lasso = lasso.fit, 
-                         ridge = ridge.fit, 
-                         pcr = pcr.fit, 
-                         pls = pls.fit))
-summary(resamp)
 
+
+
+```{r}
+resamp=resamples(list(lm = lm_fit_tr,
+                        ridge = ridge.fit,
+                        lasso = lasso.fit,
+                        pcr = pcr.fit,
+                      gam=gam.fit,
+                        mars = mars.fit))
+summary(resamp)
 bwplot(resamp, metric = "RMSE")
 ```
+
+
