@@ -1,0 +1,202 @@
+---
+title: "ds2_midterm"
+author: "xinran"
+date: "4/2/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(caret)
+library(patchwork)
+library(splines)
+library(gam)
+library(mgcv)
+library(boot)
+library(ggplot2)
+library(pdp)
+library(summarytools)
+library(earth)
+library(ModelMetrics)
+library(pls)
+library(readxl)
+```
+
+# import dataset and remove rows with missing values 
+
+```{r}
+housing=read_xlsx("./data/housing.xlsx")%>%
+    janitor::clean_names()%>%
+  na.omit()
+```
+
+
+# visualization
+```{r}
+x = model.matrix(medv ~., housing)[, -1]
+corrplot::corrplot(cor(x))
+```
+
+
+```{r,fig.height=12, fig.width=12}
+# matrix of predictors
+x = model.matrix(medv ~ .,housing)[,-1] 
+# vector of response
+y = housing$medv
+
+theme1 <- trellis.par.get()
+theme1$plot.symbol$col <- rgb(.2, .4, .2, .5) 
+theme1$plot.symbol$pch <- 16
+theme1$plot.line$col <- rgb(.8, .1, .1, 1) 
+theme1$plot.line$lwd <- 2
+theme1$strip.background$col <- rgb(.0, .2, .6, .2)
+trellis.par.set(theme1)
+featurePlot(x, y, plot = "scatter", labels = c("","Y"), type = c("p"), layout = c(4, 4))
+```
+
+## split the data into a training set and a test set. 
+```{r}
+data(housing)
+housing <- na.omit(housing)
+
+set.seed(1)
+trRows <- createDataPartition(housing$medv,
+                              p = .75,
+                              list = F)
+
+# training data
+x <- model.matrix(medv~.,housing)[trRows,-1]
+y <- housing$medv[trRows]
+
+# test data
+x2 <- model.matrix(medv~.,housing)[-trRows,-1]
+y2 <- housing$medv[-trRows]
+```
+
+## Fit linear model on the training data
+```{r}
+# train with 10-fold CV
+ctrl1 <- trainControl(method = "repeatedcv", number = 10, repeats = 5)
+lm_fit <- train(x, y, method = "lm",trControl = ctrl1)
+summary(lm_fit)
+```
+
+### fit a PCR model
+
+```{r}
+ctrl1 <- trainControl(method = "repeatedcv", number = 10, repeats = 5)
+set.seed(1)
+pcr.fit <- train(x, y,
+                  method = "pcr",
+                  tuneGrid = data.frame(ncomp = 1:14),
+                  trControl = ctrl1,
+                  scale = TRUE)
+
+predy2.pcr <- predict(pcr.fit$finalModel, newdata = x2, 
+                       ncomp = pcr.fit$bestTune$ncomp)
+mse(y2, predy2.pcr)
+
+ggplot(pcr.fit, highlight = TRUE) + theme_bw()
+```
+
+### fit a PLS model
+
+```{r}
+set.seed(1)
+pls.fit <- train(x, y,
+                 method = "pls",
+                 tuneGrid = data.frame(ncomp = 1:14),
+                 trControl = ctrl1,
+                 preProc = c("center", "scale"))
+predy2.pls<- predict(pls.fit, newdata = x2)
+mse(y2, predy2.pls)
+
+ggplot(pls.fit, highlight = TRUE)
+```
+
+### fit a ridge model
+
+```{r}
+set.seed(1)
+ridge.fit <- train(x, y,
+                   method = "glmnet",
+                   tuneGrid = expand.grid(alpha = 0, 
+                                          lambda = exp(seq(-1, 10, length=100))),
+                   trControl = ctrl1)
+predy2.ridge <- predict(ridge.fit, newdata = x2)
+mse(y2, predy2.ridge)
+
+plot(ridge.fit, xTrans = function(x) log(x))
+
+ridge.fit$bestTune
+
+coef(ridge.fit$finalModel,ridge.fit$bestTune$lambda)
+```
+
+### fit a lasso model
+
+```{r}
+set.seed(1)
+lasso.fit <- train(x, y,
+                   method = "glmnet",
+                   tuneGrid = expand.grid(alpha = 1, 
+                                          lambda = exp(seq(-1, 5, length=100))),
+                   # preProc = c("center", "scale"),
+                   trControl = ctrl1)
+predy2.lasso <- predict(lasso.fit, newdata = x2)
+mse(y2, predy2.lasso)
+
+plot(lasso.fit, xTrans = function(x) log(x))
+
+lasso.fit$bestTune
+
+coef(lasso.fit$finalModel,lasso.fit$bestTune$lambda)
+```
+
+## non-linear models
+
+### GAM
+
+```{r}
+set.seed(1)
+gam.fit <- train(x, y,
+                 method = "gam",
+                 tuneGrid = data.frame(method = "GCV.Cp", select = c(TRUE,FALSE)),
+                 trControl = ctrl1)
+
+gam.fit$bestTune
+
+gam.fit$finalModel
+```
+
+### MARS
+```{r}
+mars_grid <- expand.grid(degree = 1:2, 
+                         nprune = 2:10)
+
+set.seed(1)
+mars.fit <- train(x, y,
+                 method = "earth",
+                 tuneGrid = mars_grid,
+                 trControl = ctrl1)
+
+ggplot(mars.fit)
+
+mars.fit$bestTune
+
+coef(mars.fit$finalModel) 
+```
+
+```{r}
+resamp <- resamples(list(lasso = lasso.fit, 
+                         ridge = ridge.fit, 
+                         pcr = pcr.fit, 
+                         pls = pls.fit))
+summary(resamp)
+
+bwplot(resamp, metric = "RMSE")
+```
